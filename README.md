@@ -116,7 +116,7 @@ src/main/java/com/usermanagement/
 ## Getting started
 
 ```bash
-git clone https://github.com/yourusername/let-us-play.git
+git clone https://github.com/srj1231/let-us-play.git
 cd let-us-play
 ./mvnw spring-boot:run
 ```
