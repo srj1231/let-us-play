@@ -64,7 +64,7 @@ Every design decision in this codebase maps to a principle. If you're reading a 
 
 ---
 
-## L6-ready infrastructure
+## Infrastructure
 
 The domain model is clean OOP. The infrastructure layer is built for production:
 
