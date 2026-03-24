@@ -1,101 +1,162 @@
 package com.game.let_us_play.api.response;
 
 import com.game.let_us_play.common.GameEvent;
+import com.game.let_us_play.common.Move;
+import com.game.let_us_play.domain.board.Board;
 import com.game.let_us_play.domain.game.Game;
 import com.game.let_us_play.domain.player.Player;
-import com.game.let_us_play.service.GameService;
+import com.game.let_us_play.domain.player.BotPlayer;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * API response representing the current state of a game.
+ * API response wrapper.
  *
- * Design decisions:
- * - Record — immutable, no boilerplate.
- * - Never exposes domain objects (Game, Player, Board) directly.
- *   The API contract is independent of the domain model.
- *   If Game internals change, this response stays stable.
- * - Two static factory methods — one from Game (for GET),
- *   one from MoveResult (for POST move response).
+ * All success responses:
+ * {
+ *   "data": { ... },
+ *   "message": "..."
+ * }
+ *
+ * Errors handled by GlobalExceptionHandler — different shape.
+ * Consistent data wrapper means Angular FE always reads response.data.
  */
 public record GameResponse(
-        String gameId,
-        GameEvent status,
-        String winnerId,
-        String currentPlayerId,
-        String currentPlayerName,
-        String boardDisplay,
-        String boardSnapshot,
-        int boardSize,
-        int totalMoves,
-        boolean isOver,
-        List<PlayerInfo> players
+        GameData data,
+        String message
 ) {
 
-    /**
-     * Builds a GameResponse from a full Game object.
-     * Used by GET /game/{id}.
-     */
-    public static GameResponse from(Game game) {
-        Player current = game.getCurrentPlayer();
-        List<PlayerInfo> playerInfos = game.getPlayers()
-                .stream()
-                .map(PlayerInfo::from)
-                .toList();
-
+    public static GameResponse created(Game game) {
         return new GameResponse(
-                game.getGameId(),
-                game.getStatus(),
-                game.getWinnerId(),
-                current.getPlayerId(),
-                current.getName(),
-                game.getGameBoard().toDisplayString(),
-                game.getGameBoard().toBoardSnapshot(),
-                game.getGameBoard().getBoardSize(),
-                game.getTotalMoves(),
-                game.isOver(),
-                playerInfos
+                GameData.from(game, List.of()),
+                "Game created successfully."
         );
     }
 
-    /**
-     * Builds a GameResponse from a MoveResult.
-     * Used by POST /game/{id}/move.
-     */
-    public static GameResponse from(GameService.MoveResult result, Game game) {
-        List<PlayerInfo> playerInfos = game.getPlayers()
-                .stream()
-                .map(PlayerInfo::from)
-                .toList();
-
+    public static GameResponse from(Game game) {
         return new GameResponse(
-                result.gameId(),
-                result.status(),
-                result.winnerId(),
-                result.currentPlayerId(),
-                result.currentPlayerName(),
-                result.boardDisplay(),
-                result.boardSnapshot(),
-                game.getGameBoard().getBoardSize(),
-                result.totalMoves(),
-                result.isOver(),
-                playerInfos
+                GameData.from(game, List.of()),
+                "Game retrieved successfully."
         );
+    }
+
+    public static GameResponse from(Game game, List<Move> lastMoves) {
+        String message = switch (game.getStatus()) {
+            case WIN  -> game.getPlayers().stream()
+                    .filter(p -> p.getPlayerId().equals(game.getWinnerId()))
+                    .findFirst()
+                    .map(p -> p.getName() + " wins!")
+                    .orElse("Game over!");
+            case DRAW -> "It's a draw!";
+            default   -> "Move applied successfully.";
+        };
+        return new GameResponse(GameData.from(game, lastMoves), message);
+    }
+
+    public record GameData(
+            String gameId,
+            GameEvent status,
+            BoardData board,
+            List<PlayerInfo> players,
+            CurrentTurn currentTurn,
+            List<LastMove> lastMoves,
+            int totalMoves,
+            String winnerId,
+            String winnerName,
+            boolean isOver
+    ) {
+        public static GameData from(Game game, List<Move> lastMoves) {
+
+            Player winner = game.getWinnerId() == null ? null :
+                    game.getPlayers().stream()
+                            .filter(p -> p.getPlayerId().equals(game.getWinnerId()))
+                            .findFirst().orElse(null);
+
+            CurrentTurn currentTurn = game.isOver()
+                    ? null
+                    : CurrentTurn.from(game.getCurrentPlayer());
+
+            List<LastMove> lastMoveList = lastMoves.stream()
+                    .map(m -> {
+                        String name = game.getPlayers().stream()
+                                .filter(p -> p.getPlayerId().equals(m.getPlayerId()))
+                                .findFirst()
+                                .map(Player::getName)
+                                .orElse("Unknown");
+                        return new LastMove(name, m.getSymbol().getDisplay(), m.getRow(), m.getCol());
+                    })
+                    .toList();
+
+            return new GameData(
+                    game.getGameId(),
+                    game.getStatus(),
+                    BoardData.from(game.getGameBoard().getBoard()),
+                    game.getPlayers().stream().map(PlayerInfo::from).toList(),
+                    currentTurn,
+                    lastMoveList,
+                    game.getTotalMoves(),
+                    game.getWinnerId(),
+                    winner != null ? winner.getName() : null,
+                    game.isOver()
+            );
+        }
+    }
+
+    public record BoardData(
+            int size,
+            List<List<String>> grid
+    ) {
+        public static BoardData from(Board board) {
+            int size = board.getSize();
+            List<List<String>> grid = new ArrayList<>();
+            for (int row = 0; row < size; row++) {
+                List<String> rowList = new ArrayList<>();
+                for (int col = 0; col < size; col++) {
+                    rowList.add(board.getCell(row, col).toString());
+                }
+                grid.add(rowList);
+            }
+            return new BoardData(size, grid);
+        }
     }
 
     public record PlayerInfo(
             String playerId,
             String name,
             String symbol,
-            String type
+            String type,
+            Integer difficulty
     ) {
         public static PlayerInfo from(Player player) {
             return new PlayerInfo(
                     player.getPlayerId(),
                     player.getName(),
                     player.getSymbol().getDisplay(),
-                    player.getClass().getSimpleName()
+                    player instanceof BotPlayer ? "BOT" : "HUMAN",
+                    player instanceof BotPlayer bot ? bot.getDifficulty() : null
             );
         }
     }
+
+    public record CurrentTurn(
+            String playerId,
+            String name,
+            String symbol
+    ) {
+        public static CurrentTurn from(Player player) {
+            return new CurrentTurn(
+                    player.getPlayerId(),
+                    player.getName(),
+                    player.getSymbol().getDisplay()
+            );
+        }
+    }
+
+    public record LastMove(
+            String player,
+            String symbol,
+            int row,
+            int col
+    ) {}
 }
