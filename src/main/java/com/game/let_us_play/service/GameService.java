@@ -3,6 +3,7 @@ package com.game.let_us_play.service;
 import com.game.let_us_play.api.response.GameResponse;
 import com.game.let_us_play.common.GameEvent;
 import com.game.let_us_play.common.GameExceptions;
+import com.game.let_us_play.common.Move;
 import com.game.let_us_play.common.Symbol;
 import com.game.let_us_play.domain.game.BoardFeatures;
 import com.game.let_us_play.domain.game.Game;
@@ -22,32 +23,14 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Spring service — manages game lifecycle.
+ * Manages game lifecycle.
  *
- * Design decisions:
- * - GameService is the only place where Game instances are
- *   created. Nothing else calls new Game() directly.
- *   Single place to control game creation logic.
+ * Stage 1: ConcurrentHashMap in-memory store.
+ * Stage 2: GameRepository + PostgreSQL replaces the map.
  *
- * - In-memory store (ConcurrentHashMap) for Stage 1.
- *   Stage 2 replaces this with GameRepository + DB.
- *   The rest of the code doesn't change — only this class.
- *
- * - ConcurrentHashMap not HashMap — multiple HTTP requests
- *   can arrive simultaneously (two players in different games).
- *   ConcurrentHashMap is thread-safe for concurrent reads/writes.
- *
- * - BoardFeatures and GameBoardFeatures are injected by Spring
- *   via @Qualifier — GameService doesn't know which concrete
- *   implementation it's using. Fully decoupled.
- *
- * - After every human move, GameService checks if the next
- *   player is a bot and auto-triggers the bot move.
- *   This means the API caller gets both results in one response.
- *
- * - makeMove() returns MoveResult — a clean response object
- *   that carries everything the controller needs without
- *   exposing the full Game object to the API layer.
+ * makeMove() now returns GameResponse directly — it's the
+ * only place that knows about lastMoves for this turn.
+ * Controller stays thin — just calls service and returns.
  */
 @Service
 public class GameService {
@@ -58,7 +41,6 @@ public class GameService {
     private final GameBoardFeatures gameBoardFeatures;
     private final MoveStrategy randomStrategy;
 
-    // Stage 1: in-memory store. Stage 2: replaced by GameRepository.
     private final Map<String, Game> activeGames = new ConcurrentHashMap<>();
 
     public GameService(
@@ -71,16 +53,8 @@ public class GameService {
         this.randomStrategy    = randomStrategy;
     }
 
-    /**
-     * Creates a Human vs Human game.
-     *
-     * @param playerOneName name of player one
-     * @param playerOneUserId userId of player one (nullable for guests)
-     * @param playerTwoName name of player two
-     * @param playerTwoUserId userId of player two (nullable for guests)
-     * @param boardSize size of the board (3 for standard TicTacToe)
-     * @return the created Game
-     */
+    // ── Game creation ─────────────────────────────────────────────────────
+
     public Game createHumanVsHumanGame(
             String playerOneName,
             String playerOneUserId,
@@ -91,19 +65,9 @@ public class GameService {
         List<Player> players = new ArrayList<>();
         players.add(new HumanPlayer(playerOneName, Symbol.CROSS, playerOneUserId));
         players.add(new HumanPlayer(playerTwoName, Symbol.ZERO, playerTwoUserId));
-
         return createAndStartGame(players, boardSize);
     }
 
-    /**
-     * Creates a Human vs Bot game.
-     *
-     * @param humanName name of the human player
-     * @param humanUserId userId of the human (nullable for guests)
-     * @param boardSize size of the board
-     * @param botDifficulty 1 = easy (random), more levels in Stage 2
-     * @return the created Game
-     */
     public Game createHumanVsBotGame(
             String humanName,
             String humanUserId,
@@ -113,64 +77,56 @@ public class GameService {
         List<Player> players = new ArrayList<>();
         players.add(new HumanPlayer(humanName, Symbol.CROSS, humanUserId));
         players.add(new BotPlayer("Bot", Symbol.ZERO, randomStrategy, botDifficulty));
-
         return createAndStartGame(players, boardSize);
     }
 
+    // ── Move handling ─────────────────────────────────────────────────────
+
     /**
-     * Processes a human player's move.
-     *
-     * Flow:
-     * 1. Find the game
-     * 2. Apply the human's move
-     * 3. If game not over and next player is a bot — auto-trigger bot move
-     * 4. Return the result
-     *
-     * @param gameId the game to make a move in
-     * @param row    row of the move
-     * @param col    col of the move
-     * @return MoveResult containing the outcome and updated board state
+     * Applies human move, auto-triggers bot if next.
+     * Collects all moves made this turn into lastMoves.
+     * Returns GameResponse with full structured data.
      */
-    public MoveResult makeMove(String gameId, int row, int col) {
+    public GameResponse makeMove(String gameId, int row, int col) {
         Game game = findGame(gameId);
+        List<Move> lastMoves = new ArrayList<>();
 
-        // Apply human move
         GameEvent result = game.makeMove(row, col);
+        lastMoves.add(getLastMove(game));
 
-        // If game is over after human move — return immediately
         if (result != GameEvent.IN_PROGRESS) {
             cleanupIfOver(game);
-            return MoveResult.of(game, result);
+            return GameResponse.from(game, lastMoves);
         }
 
-        // If next player is a bot — auto-trigger bot move
         if (isCurrentPlayerBot(game)) {
-            GameEvent botResult = game.makeBotMove();
+            game.makeBotMove();
+            lastMoves.add(getLastMove(game));
             cleanupIfOver(game);
-            return MoveResult.of(game, botResult);
         }
 
-        return MoveResult.of(game, result);
+        return GameResponse.from(game, lastMoves);
     }
 
-    /**
-     * Returns the current state of a game.
-     * Used by GET /game/{id} to poll game state.
-     */
+    // ── Queries ───────────────────────────────────────────────────────────
+
     public Game getGame(String gameId) {
         return findGame(gameId);
     }
 
-    public Map<String, Game> getAllActiveGames() {
-        return activeGames;
+    public void abandonGame(String gameId) {
+        findGame(gameId);
+        activeGames.remove(gameId);
+        log.info("Game [{}] abandoned.", gameId);
     }
+
+    // ── Private helpers ───────────────────────────────────────────────────
 
     private Game createAndStartGame(List<Player> players, int boardSize) {
         Game game = new Game(players, boardSize, boardFeatures, gameBoardFeatures);
         game.startGame();
         activeGames.put(game.getGameId(), game);
-        log.info("Game [{}] created and stored. Active games: {}",
-                game.getGameId(), activeGames.size());
+        log.info("Game [{}] created. Active games: {}", game.getGameId(), activeGames.size());
         return game;
     }
 
@@ -182,78 +138,19 @@ public class GameService {
         return game;
     }
 
+    private Move getLastMove(Game game) {
+        List<Move> history = game.getMoveHistory();
+        return history.get(history.size() - 1);
+    }
+
     private boolean isCurrentPlayerBot(Game game) {
         return game.getCurrentPlayer() instanceof BotPlayer;
     }
 
     private void cleanupIfOver(Game game) {
         if (game.isOver()) {
-            log.info("Game [{}] is over with status [{}]. Removing from active games.",
-                    game.getGameId(), game.getStatus());
-            // Stage 2: persist to DB before removing
-            // gameRepository.save(GameState.from(game));
+            log.info("Game [{}] over — status: [{}].", game.getGameId(), game.getStatus());
             activeGames.remove(game.getGameId());
         }
     }
-
-    /**
-     * Response object for a move — carries everything the
-     * controller needs without exposing the full Game object.
-     *
-     * Inner class because it only exists to serve GameService
-     * responses. If it grows complex, extract to its own file.
-     */
-    public record MoveResult(
-            String gameId,
-            GameEvent status,
-            String winnerId,
-            String currentPlayerId,
-            String currentPlayerName,
-            String boardDisplay,
-            String boardSnapshot,
-            int totalMoves,
-            boolean isOver
-    ) {
-        public static MoveResult of(Game game, GameEvent result) {
-            Player currentPlayer = game.getCurrentPlayer();
-            return new MoveResult(
-                    game.getGameId(),
-                    result,
-                    game.getWinnerId(),
-                    currentPlayer.getPlayerId(),
-                    currentPlayer.getName(),
-                    game.getGameBoard().toDisplayString(),
-                    game.getGameBoard().toBoardSnapshot(),
-                    game.getTotalMoves(),
-                    game.isOver()
-            );
-        }
-    }
-
-    public void abandonGame(String gameId) {
-        findGame(gameId);
-        activeGames.remove(gameId);
-        log.info("Game [{}] abandoned.", gameId);
-    }
-
-    public GameResponse toGameResponse(MoveResult result) {
-        Game game = activeGames.get(result.gameId());
-        if (game != null) {
-            return GameResponse.from(result, game);
-        }
-        return new GameResponse(
-                result.gameId(),
-                result.status(),
-                result.winnerId(),
-                result.currentPlayerId(),
-                result.currentPlayerName(),
-                result.boardDisplay(),
-                result.boardSnapshot(),
-                0,
-                result.totalMoves(),
-                true,
-                java.util.List.of()
-        );
-    }
-
 }

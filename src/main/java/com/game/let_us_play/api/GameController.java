@@ -12,23 +12,15 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * REST API for game management.
- *
- * Design decisions:
- * - Intentionally thin — no business logic here.
- *   Validates input, calls GameService, maps to response.
- * - @Valid triggers Jakarta validation. Failures go to
- *   GlobalExceptionHandler automatically.
- * - Domain objects never returned directly — always GameResponse.
- * - @CrossOrigin for Angular FE on different port locally.
- *   Tighten to specific origin in production.
+ * REST controller for game management.
+ * Intentionally thin — validate, delegate, return.
  *
  * API:
- *   POST   /api/v1/games/human-vs-human    Create HvH game
- *   POST   /api/v1/games/human-vs-bot      Create HvB game
- *   GET    /api/v1/games/{gameId}           Get game state
- *   POST   /api/v1/games/{gameId}/move      Make a move
- *   DELETE /api/v1/games/{gameId}           Abandon a game
+ *   POST   /api/v1/games/human-vs-human
+ *   POST   /api/v1/games/human-vs-bot
+ *   GET    /api/v1/games/{gameId}
+ *   POST   /api/v1/games/{gameId}/move
+ *   DELETE /api/v1/games/{gameId}
  */
 @RestController
 @RequestMapping("/api/v1/games")
@@ -52,7 +44,7 @@ public class GameController {
                 request.playerTwoUserId(),
                 request.boardSize()
         );
-        return ResponseEntity.status(HttpStatus.CREATED).body(GameResponse.from(game));
+        return ResponseEntity.status(HttpStatus.CREATED).body(GameResponse.created(game));
     }
 
     @PostMapping("/human-vs-bot")
@@ -65,7 +57,7 @@ public class GameController {
                 request.boardSize(),
                 request.botDifficulty()
         );
-        return ResponseEntity.status(HttpStatus.CREATED).body(GameResponse.from(game));
+        return ResponseEntity.status(HttpStatus.CREATED).body(GameResponse.created(game));
     }
 
     @GetMapping("/{gameId}")
@@ -74,18 +66,13 @@ public class GameController {
         return ResponseEntity.ok(GameResponse.from(game));
     }
 
-    /**
-     * Makes a move in the game.
-     * If the next player is a bot, bot move is auto-triggered.
-     * Response reflects the state after all moves in this turn.
-     */
     @PostMapping("/{gameId}/move")
     public ResponseEntity<GameResponse> makeMove(
             @PathVariable String gameId,
             @Valid @RequestBody MakeMoveRequest request
     ) {
-        GameService.MoveResult result = gameService.makeMove(gameId, request.row(), request.col());
-        return ResponseEntity.ok(gameService.toGameResponse(result));
+        GameResponse response = gameService.makeMove(gameId, request.row(), request.col());
+        return ResponseEntity.ok(response);
     }
 
     @DeleteMapping("/{gameId}")
