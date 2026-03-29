@@ -1,6 +1,5 @@
 package com.game.let_us_play.api;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.game.let_us_play.api.response.GameResponse;
 import com.game.let_us_play.common.GameEvent;
 import com.game.let_us_play.common.GameExceptions;
@@ -369,6 +368,48 @@ class GameControllerTest {
                     .andExpect(status().isOk());
 
             verify(gameService).makeMove(GAME_ID, 1, 2);
+        }
+
+        @Test
+        @DisplayName("returns 409 CONFLICT when cell is already occupied")
+        void returns409_whenCellOccupied() throws Exception {
+            when(gameService.makeMove(GAME_ID, 1, 2))
+                    .thenThrow(new GameExceptions.CellAlreadyOccupiedException(1, 2));
+
+            mockMvc.perform(post(BASE_URL + "/{gameId}/move", GAME_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                            { "row": 1, "col": 2 }
+                            """))
+                    .andExpect(status().isConflict());
+        }
+
+        @Test
+        @DisplayName("returns 409 CONFLICT when game is already over")
+        void returns409_whenGameAlreadyOver() throws Exception {
+            when(gameService.makeMove(GAME_ID, 1, 2))
+                    .thenThrow(new GameExceptions.GameAlreadyOverException(GAME_ID));
+
+            mockMvc.perform(post(BASE_URL + "/{gameId}/move", GAME_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                            { "row": 1, "col": 2 }
+                            """))
+                    .andExpect(status().isConflict());
+        }
+
+        @Test
+        @DisplayName("returns 400 BAD REQUEST when move is invalid")
+        void returns400_whenMoveInvalid() throws Exception {
+            when(gameService.makeMove(GAME_ID, 1, 2))
+                    .thenThrow(new GameExceptions.InvalidMoveException("Move out of bounds"));
+
+            mockMvc.perform(post(BASE_URL + "/{gameId}/move", GAME_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                            { "row": 1, "col": 2 }
+                            """))
+                    .andExpect(status().isBadRequest());
         }
     }
 
