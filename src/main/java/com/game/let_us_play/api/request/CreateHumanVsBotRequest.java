@@ -1,9 +1,7 @@
 package com.game.let_us_play.api.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.*;
 
 /**
  * Request body for creating a Human vs Bot game.
@@ -11,13 +9,19 @@ import jakarta.validation.constraints.NotBlank;
 public record CreateHumanVsBotRequest(
 
         @NotBlank(message = "Player name must not be blank.")
+        @Size(max = 50)
         @Schema(example = "Alice")
         String playerName,
 
+        @Pattern(
+                regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                message = "playerUserId must be a valid UUID."
+        )
         @Schema(example = "123")
         String playerUserId,       // nullable — guest players have no userId
 
-        @Min(value = 3, message = "Board size must be at least 3.")
+        @Min(value = 3, message = "Board size must be between 3 and 10.")
+        @Max(value = 10, message = "Board size must be between 3 and 10.")
         @Schema(example = "4")
         int boardSize,
 
