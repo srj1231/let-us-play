@@ -23,5 +23,6 @@ public record CreateHumanVsBotRequest(
 
         @Min(value = 1, message = "Difficulty must be between 1 and 3.")
         @Max(value = 3, message = "Difficulty must be between 1 and 3.")
+        @Schema(example = "3")
         int botDifficulty
 ) {}
