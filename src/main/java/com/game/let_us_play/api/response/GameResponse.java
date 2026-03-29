@@ -145,6 +145,10 @@ public record GameResponse(
             String symbol
     ) {
         public static CurrentTurn from(Player player) {
+            if (player == null) {
+                return null;
+            }
+
             return new CurrentTurn(
                     player.getPlayerId(),
                     player.getName(),
